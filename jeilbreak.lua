@@ -173,7 +173,7 @@ local function showKeyGate()
     local function submit()
         if finished then return end
         local key=box.Text:match("^%s*(.-)%s*$")
-        if #key<=256 and digest256(key)=="57c5be41145e8bb6b3b2db47d42e3f7c3afd6fc84acd3582ce25017899e8bea7" then
+        if #key<=256 and digest256(key)=="43ff4f6d80cabed799f32de52b0c2cd7fba0758f2f33f71a1845cbbb7344c89f" then
             box.Text="";finish(true)
         else
             status.Text=key=="" and "Enter your key first." or "Invalid key. Check it and try again."
@@ -8540,6 +8540,7 @@ local radius, flySpeed, runSpeed = 280, 100, 60
 local bindType, bindCode = "Keyboard", Enum.KeyCode.LeftAlt
 local focused, stopped, capturing, waitRelease = true, false, false, false
 local menuOpen, busy, ticket = true, false, 0
+local vehicleFly={speed=100,state=nil}
 local target, flight, speedRoot, activePrompt, activeTool
 local connections, overlays, seats, prompts, cooldowns = {}, {}, {}, {}, {}
 local switches = {}
@@ -8739,6 +8740,7 @@ local function stopSpeed()
     end
 end
 local function stopFly()
+    if vehicleFly.stop then vehicleFly.stop() end
     local f = flight
     flight = nil
     if f then
@@ -8765,6 +8767,77 @@ local function startFly()
         RigidityEnabled=true, CFrame=r.CFrame.Rotation}, r)
     flight={c=c,h=h,r=r,a=a,v=v,o=o,rotate=h.AutoRotate,platform=h.PlatformStand,heading=camera.CFrame.Rotation}
     h.AutoRotate=false; h.PlatformStand=true
+end
+function vehicleFly.driver()
+    local c,h,r=info(me)
+    local folder=workspace:FindFirstChild("Vehicles")
+    if not c or not folder or not h.Sit then return end
+    local root=r.AssemblyRootPart
+    if not root or root.Anchored or root:IsDescendantOf(c) or not root:IsDescendantOf(folder) then return end
+    local model=root
+    while model.Parent and model.Parent~=folder do model=model.Parent end
+    if model.Parent~=folder then return end
+    local seat=model:FindFirstChild("Seat",true)
+    if not seat or not seat:IsA("BasePart") then return end
+    local distance=(r.Position-seat.Position).Magnitude
+    if distance>2.75 then return end
+    for _,part in ipairs(model:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name:lower():find("passenger",1,true)
+            and (r.Position-part.Position).Magnitude<=distance+0.25 then return end
+    end
+    return root,c,h,seat
+end
+function vehicleFly.stop()
+    local f=vehicleFly.state
+    vehicleFly.state=nil
+    if not f then return end
+    f.v:Destroy();f.o:Destroy();f.a:Destroy()
+    if f.root.Parent then
+        f.root.AssemblyLinearVelocity=Vector3.zero
+        f.root.AssemblyAngularVelocity=Vector3.zero
+    end
+end
+function vehicleFly.start()
+    local root,c,h,seat=vehicleFly.driver()
+    if not root then arrestStatus.Text="Vehicle Fly: sit in the driver seat first.";return end
+    stopFly();stopSpeed();S.speed=false;target=nil
+    local a=make("Attachment",{},root)
+    local v=make("LinearVelocity",{Attachment0=a,RelativeTo=Enum.ActuatorRelativeTo.World,
+        VelocityConstraintMode=Enum.VelocityConstraintMode.Vector,ForceLimitsEnabled=false,
+        VectorVelocity=Vector3.zero},root)
+    local o=make("AlignOrientation",{Attachment0=a,Mode=Enum.OrientationAlignmentMode.OneAttachment,
+        RigidityEnabled=true,CFrame=root.CFrame.Rotation},root)
+    vehicleFly.state={root=root,c=c,h=h,seat=seat,a=a,v=v,o=o,
+        offset=seat.CFrame.Rotation:ToObjectSpace(root.CFrame.Rotation)}
+    arrestStatus.Text="Vehicle Fly: WASD | E up | Q down. Camera controls direction."
+end
+function vehicleFly.step(canMove)
+    local f=vehicleFly.state
+    if not f then return false end
+    local c,h,r=info(me)
+    if not c or c~=f.c or not h.Sit or not f.root.Parent or f.root.Anchored
+        or r.AssemblyRootPart~=f.root or not f.v.Parent or not f.o.Parent or not f.seat.Parent
+        or (r.Position-f.seat.Position).Magnitude>3.5 then
+        vehicleFly.stop();refresh();return false
+    end
+    local move=Vector3.zero
+    local camera=workspace.CurrentCamera
+    if camera then
+        local cf=camera.CFrame
+        local flat=Vector3.new(cf.LookVector.X,0,cf.LookVector.Z)
+        if flat.Magnitude>0.001 then
+            f.o.CFrame=CFrame.lookAt(Vector3.zero,flat.Unit)*f.offset
+        end
+        if canMove then
+            local function key(k) return Input:IsKeyDown(k) and 1 or 0 end
+            move=cf.LookVector*(key(Enum.KeyCode.W)-key(Enum.KeyCode.S))
+                +cf.RightVector*(key(Enum.KeyCode.D)-key(Enum.KeyCode.A))
+                +Vector3.yAxis*(key(Enum.KeyCode.E)-key(Enum.KeyCode.Q))
+        end
+    end
+    if move.Magnitude>1 then move=move.Unit end
+    f.v.VectorVelocity=move*vehicleFly.speed
+    return true
 end
 local function releaseInteraction()
     local p,t = activePrompt,activeTool
@@ -8794,6 +8867,14 @@ end
 addSwitch("Aim", function() return S.aim end, function() toggleFeature("aim") end)
 addSwitch("ESP / WH", function() return S.esp end, function() toggleFeature("esp") end)
 addSwitch("Fly", function() return flight~=nil end, function() toggleFeature("fly") end)
+addSwitch("Vehicle Fly",function() return vehicleFly.state~=nil end,function()
+    if hubActive then arrestStatus.Text="Stop automation before enabling Vehicle Fly.";return end
+    if vehicleFly.state then vehicleFly.stop() else vehicleFly.start() end
+    refresh()
+end)
+field("Vehicle Fly Speed",vehicleFly.speed,function(n)
+    vehicleFly.speed=math.clamp(n,10,200);return vehicleFly.speed
+end)
 addSwitch("Speed", function() return S.speed end, function() toggleFeature("speed") end)
 addSwitch("Noclip", function() return noclipOn end, function()
     if hubActive then arrestStatus.Text="Stop automation before changing Noclip.";return end
@@ -9270,9 +9351,10 @@ local function down(k) return Input:IsKeyDown(k) and 1 or 0 end
 connect(Run.PreSimulation,function()
     if stopped then return end
     local c,h,r=info(me)
-    if not c then if flight then stopFly(); refresh() end; stopSpeed(); return end
+    if not c then if flight or vehicleFly.state then stopFly(); refresh() end; stopSpeed(); return end
     local canMove=focused and not hubActive and not S.auto and not capturing and not drag
         and not Input:GetFocusedTextBox() and not GuiService.MenuIsOpen
+    if vehicleFly.step(canMove) then return end
     if flight then
         local f=flight
         if f.c~=c or h.Sit or h.SeatPart or r.Anchored or not f.v.Parent or not f.o.Parent then
