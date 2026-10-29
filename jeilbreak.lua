@@ -173,7 +173,7 @@ local function showKeyGate()
     local function submit()
         if finished then return end
         local key=box.Text:match("^%s*(.-)%s*$")
-        if #key<=256 and digest256(key)=="43ff4f6d80cabed799f32de52b0c2cd7fba0758f2f33f71a1845cbbb7344c89f" then
+        if #key<=256 and digest256(key)=="c69dbc30c1725dfb582f98c23e8042a4b5306dccafcb41aa57c45a1f79650f73" then
             box.Text="";finish(true)
         else
             status.Text=key=="" and "Enter your key first." or "Invalid key. Check it and try again."
@@ -502,6 +502,9 @@ local function planOver(a,b,extra,radius)
  return nil
 end
 local function navigationPoint(a,b,extra,state,radius)
+ if corridorClear(a,b,extra,radius) then
+  state.path={b};state.goal=b;state.index=1;return b
+ end
  if state.goal and (state.goal-b).Magnitude>12 then state.path=nil end
  if not state.path then
   state.path=planOver(a,b,extra,radius)
@@ -526,8 +529,7 @@ local function intercept(p)
  assert(driver(),'Driver position required')
  local v,o=holdVehicle()
  local _,r=parts(p)
- local height=math.max(car.Position.Y,r.Position.Y)+140
- local phase=1
+ local phase=3
  local deadline=os.clock()+35
  local lastLog=''
  local contacts=0
@@ -543,25 +545,20 @@ local function intercept(p)
   local flat=V(position.X-car.Position.X,0,position.Z-car.Position.Z)
   local pit=groundCar(p)
   local goal
-  if phase==1 then
-   goal=V(car.Position.X,height,car.Position.Z)
-   if math.abs(car.Position.Y-height)<5 then phase=2 end
-  elseif phase==2 then
-   local lead=V(velocity.X,0,velocity.Z)*math.min(flat.Magnitude/360,.5)
-   if lead.Magnitude>60 then lead=lead.Unit*60 end
-   goal=V(position.X+lead.X,math.max(height,position.Y+25),position.Z+lead.Z)
-   if flat.Magnitude<22 then phase=3 end
-  else
-   if flat.Magnitude>90 then phase=2 end
-   if pit and enemy then
-    local direction=V(velocity.X,0,velocity.Z)
-    if direction.Magnitude<1 then direction=enemy.CFrame.LookVector end
-    goal=enemy.Position-direction.Unit*3+velocity*.08
-   else
-    goal=position+V(0,10,0)+velocity*.08
+  local lead=V(velocity.X,0,velocity.Z)*math.min(flat.Magnitude/360,.35)
+  if lead.Magnitude>35 then lead=lead.Unit*35 end
+  if pit and enemy then
+   local direction=V(velocity.X,0,velocity.Z)
+   if direction.Magnitude<1 then
+    local look=enemy.CFrame.LookVector
+    direction=V(look.X,0,look.Z)
    end
+   if direction.Magnitude<.01 then direction=V(0,0,-1) end
+   goal=enemy.Position-direction.Unit*3+lead
+  else
+   goal=position+V(0,2,0)+lead
   end
-  local label=phase==1 and 'Climbing' or phase==2 and 'Intercepting' or pit and 'PIT contact attempt' or 'Close approach'
+  local label=pit and 'PIT contact attempt' or 'Direct approach'
   if label~=lastLog then log(label..': '..p.Name);lastLog=label end
   if phase==3 and pit and enemy and not rearPlaced
    and (car.Position-enemy.Position).Magnitude<=24 then
@@ -591,7 +588,7 @@ local function intercept(p)
    return
   else
   assert(os.clock()<deadline,'Intercept timeout')
-  local speed=phase==2 and 360 or 170
+  local speed=flat.Magnitude>30 and 360 or 170
   if distance>.1 then
    local forward=V(delta.X,0,delta.Z)
    if forward.Magnitude>1 then o.CFrame=CFrame.lookAt(Vector3.zero,forward.Unit) end
@@ -1142,7 +1139,7 @@ local OUTBOUND = {
     Vector3.new(102.61,19.72,-1511.15),
     Vector3.new(102.86,18.81,-1489.98),
 }
-local CAR_SPEED = 280
+local CAR_SPEED = 400
 local CAR_HEIGHT = 300
 local PERSON_SPEED = 100
 local HOLD_SECONDS = 12
@@ -1297,7 +1294,7 @@ local function startMotion(part, person)
     orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
     orientation.Attachment0 = attachment
     orientation.RigidityEnabled = true
-    orientation.CFrame = part.CFrame.Rotation
+    orientation.CFrame = _hubLevel(part)
     orientation.Parent = part
     motion.velocity = velocity
 end
@@ -1350,14 +1347,14 @@ local function moveCar(target, maximumSpeed, title)
         end
         local targetSpeed = math.min(
             maximumSpeed,
-            math.sqrt(360 * math.max(distance - 0.4, 0)),
-            distance * 2.5
+            math.sqrt(1600 * math.max(distance - 0.4, 0)),
+            distance * 6
         )
         local desired = distance > 0.2
             and offset.Unit * targetSpeed or Vector3.zero
         local delta = desired - current.command
         local rate = desired.Magnitude < current.command.Magnitude
-            and 180 or 140
+            and 800 or 600
         local change = rate * math.min(dt, 0.1)
         if delta.Magnitude <= change then
             current.command = desired
@@ -1467,7 +1464,7 @@ local function runCycle()
         startMotion(car, false)
         moveCar(Vector3.new(origin.X, altitude, origin.Z), 120, "Ascending")
         moveCar(Vector3.new(PARK.X, altitude, PARK.Z), CAR_SPEED, "Flying to Donut")
-        moveCar(PARK, 90, "Descending")
+        moveCar(PARK, 240, "Descending")
         clearMotion()
     end
     pause(0.5)
@@ -1534,7 +1531,6 @@ local function runCycle()
             flyPerson({entry}, "Driver-side approach")
             pause(0.2)
         end
-        if not nearestDriver() then error("Driver-side approach not confirmed.",0) end
         message("Entering driver seat: "..attempt.." / 3")
         tapE()
         deadline = os.clock()+5
@@ -1577,11 +1573,7 @@ hubCapture(function()
     startButton.Text = "Running..."
     task.spawn(function()
         local ok, problem = pcall(function()
-            for seconds = 3, 1, -1 do
-                if cancelled or destroyed then error(reason, 0) end
-                message("Return to Roblox: " .. seconds)
-                task.wait(1)
-            end
+            if cancelled or destroyed then error(reason, 0) end
             armed = true
             runCycle()
         end)
@@ -1636,7 +1628,7 @@ local OUTBOUND = {
     Vector3.new(1762.75,28.42,-4158.65),
     Vector3.new(1762.75,26.98,-4158.65),
 }
-local CAR_SPEED = 280
+local CAR_SPEED = 400
 local CAR_HEIGHT = 300
 local PERSON_SPEED = 100
 local HOLD_SECONDS = 12
@@ -1791,7 +1783,7 @@ local function startMotion(part, person)
     orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
     orientation.Attachment0 = attachment
     orientation.RigidityEnabled = true
-    orientation.CFrame = part.CFrame.Rotation
+    orientation.CFrame = _hubLevel(part)
     orientation.Parent = part
     motion.velocity = velocity
 end
@@ -1844,14 +1836,14 @@ local function moveCar(target, maximumSpeed, title)
         end
         local targetSpeed = math.min(
             maximumSpeed,
-            math.sqrt(360 * math.max(distance - 0.4, 0)),
-            distance * 2.5
+            math.sqrt(1600 * math.max(distance - 0.4, 0)),
+            distance * 6
         )
         local desired = distance > 0.2
             and offset.Unit * targetSpeed or Vector3.zero
         local delta = desired - current.command
         local rate = desired.Magnitude < current.command.Magnitude
-            and 180 or 140
+            and 800 or 600
         local change = rate * math.min(dt, 0.1)
         if delta.Magnitude <= change then
             current.command = desired
@@ -1961,7 +1953,7 @@ local function runCycle()
         startMotion(car, false)
         moveCar(Vector3.new(origin.X, altitude, origin.Z), 120, "Ascending")
         moveCar(Vector3.new(PARK.X, altitude, PARK.Z), CAR_SPEED, "Flying to Market")
-        moveCar(PARK, 90, "Descending")
+        moveCar(PARK, 240, "Descending")
         clearMotion()
     end
     pause(0.5)
@@ -2028,7 +2020,6 @@ local function runCycle()
             flyPerson({entry}, "Driver-side approach")
             pause(0.2)
         end
-        if not nearestDriver() then error("Driver-side approach not confirmed.",0) end
         message("Entering driver seat: "..attempt.." / 3")
         tapE()
         deadline = os.clock()+5
@@ -2071,11 +2062,7 @@ hubCapture(function()
     startButton.Text = "Running..."
     task.spawn(function()
         local ok, problem = pcall(function()
-            for seconds = 3, 1, -1 do
-                if cancelled or destroyed then error(reason, 0) end
-                message("Return to Roblox: " .. seconds)
-                task.wait(1)
-            end
+            if cancelled or destroyed then error(reason, 0) end
             armed = true
             runCycle()
         end)
@@ -2130,7 +2117,7 @@ local OUTBOUND = {
     Vector3.new(-1569.09, 18.41, 708.37),
     Vector3.new(-1553.46, 18.41, 643.88),  
 }
-local CAR_SPEED = 280
+local CAR_SPEED = 400
 local CAR_HEIGHT = 300
 local PERSON_SPEED = 65
 local HOLD_SECONDS = 12
@@ -2285,7 +2272,7 @@ local function startMotion(part, person)
     orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
     orientation.Attachment0 = attachment
     orientation.RigidityEnabled = true
-    orientation.CFrame = part.CFrame.Rotation
+    orientation.CFrame = _hubLevel(part)
     orientation.Parent = part
     motion.velocity = velocity
 end
@@ -2338,14 +2325,14 @@ local function moveCar(target, maximumSpeed, title)
         end
         local targetSpeed = math.min(
             maximumSpeed,
-            math.sqrt(360 * math.max(distance - 0.4, 0)),
-            distance * 2.5
+            math.sqrt(1600 * math.max(distance - 0.4, 0)),
+            distance * 6
         )
         local desired = distance > 0.2
             and offset.Unit * targetSpeed or Vector3.zero
         local delta = desired - current.command
         local rate = desired.Magnitude < current.command.Magnitude
-            and 180 or 140
+            and 800 or 600
         local change = rate * math.min(dt, 0.1)
         if delta.Magnitude <= change then
             current.command = desired
@@ -2455,7 +2442,7 @@ local function runCycle()
         startMotion(car, false)
         moveCar(Vector3.new(origin.X, altitude, origin.Z), 120, "Ascending")
         moveCar(Vector3.new(PARK.X, altitude, PARK.Z), CAR_SPEED, "Flying to Benzin")
-        moveCar(PARK, 90, "Descending")
+        moveCar(PARK, 240, "Descending")
         clearMotion()
     end
     pause(0.5)
@@ -2522,7 +2509,6 @@ local function runCycle()
             flyPerson({entry}, "Driver-side approach")
             pause(0.2)
         end
-        if not nearestDriver() then error("Driver-side approach not confirmed.",0) end
         message("Entering driver seat: "..attempt.." / 3")
         tapE()
         deadline = os.clock()+5
@@ -2565,11 +2551,7 @@ hubCapture(function()
     startButton.Text = "Running..."
     task.spawn(function()
         local ok, problem = pcall(function()
-            for seconds = 3, 1, -1 do
-                if cancelled or destroyed then error(reason, 0) end
-                message("Return to Roblox: " .. seconds)
-                task.wait(1)
-            end
+            if cancelled or destroyed then error(reason, 0) end
             armed = true
             runCycle()
         end)
@@ -3465,7 +3447,7 @@ local function beginMotion(root, foot, noclip)
 
     orientation.RigidityEnabled = true
 
-    orientation.CFrame = root.CFrame.Rotation
+    orientation.CFrame = _hubLevel(root)
 
     orientation.Parent = root
 
@@ -3611,9 +3593,9 @@ local function moveTo(target, speed)
 
                     speed,
 
-                    math.sqrt(360 * math.max(0, distance - 0.4)),
+                    math.sqrt(1600 * math.max(0, distance - 0.4)),
 
-                    distance * 2.5
+                    distance * 6
 
                 )
 
@@ -3631,7 +3613,7 @@ local function moveTo(target, speed)
 
             local change = wanted - commanded
 
-            local limit = 140 * math.min(dt, 0.1)
+            local limit = 600 * math.min(dt, 0.1)
 
             if change.Magnitude > limit then
 
@@ -4893,11 +4875,11 @@ local function flyVehicle(car, target)
 
         setStatus("Vehicle: cruising...")
 
-        moveTo(V(target.X, height, target.Z), 280)
+        moveTo(V(target.X, height, target.Z), 400)
 
         setStatus("Vehicle: descending...")
 
-        moveTo(target, 90)
+        moveTo(target, 240)
 
         endMotion()
 
@@ -5836,7 +5818,7 @@ local function beginMotion(root,foot,noclip,rotation)
     orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
     orientation.Attachment0 = attachment
     orientation.RigidityEnabled = true
-    orientation.CFrame = rotation or root.CFrame.Rotation
+    orientation.CFrame = rotation or _hubLevel(root)
     orientation.Parent = root
     local saved = {
         root=root,foot=foot,noclip=noclip,
@@ -5977,8 +5959,8 @@ local function moveTo(target,speed)
             else
                 wanted = delta.Unit*math.min(
                     speed,
-                    math.sqrt(360*math.max(0,distance-0.4)),
-                    distance*2.5
+                    math.sqrt(1600*math.max(0,distance-0.4)),
+                    distance*6
                 )
             end
         end
@@ -5986,7 +5968,7 @@ local function moveTo(target,speed)
             commanded = wanted
         else
             local change = wanted-commanded
-            local limit = 140*math.min(dt,0.1)
+            local limit = 600*math.min(dt,0.1)
             if change.Magnitude > limit then change = change.Unit*limit end
             commanded = commanded+change
         end
@@ -6049,11 +6031,6 @@ local function boardDriver(car)
         waitChecked(0.4)
         local currentDriver,passengers = seatParts(car)
         local d = (context.root.Position-currentDriver.Position).Magnitude
-        for _,passenger in ipairs(passengers) do
-            if (context.root.Position-passenger.Position).Magnitude <= d then
-                error("Driver-side approach not confirmed.",0)
-            end
-        end
         tapE()
         local t,stableSince = os.clock(),nil
         while os.clock()-t < 5 do
@@ -6089,9 +6066,9 @@ local function flyVehicle(car,target)
         setStatus("Vehicle: climbing...")
         moveTo(V(origin.X,height,origin.Z),120)
         setStatus("Vehicle: cruising...")
-        moveTo(V(target.X,height,target.Z),280)
+        moveTo(V(target.X,height,target.Z),400)
         setStatus("Vehicle: descending...")
-        moveTo(target,90)
+        moveTo(target,240)
         endMotion()
     end
     waitChecked(0.4)
@@ -6818,7 +6795,7 @@ local function beginMotion(root,foot,noclip,rotation)
     orientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
     orientation.Attachment0 = attachment
     orientation.RigidityEnabled = true
-    orientation.CFrame = rotation or root.CFrame.Rotation
+    orientation.CFrame = rotation or _hubLevel(root)
     orientation.Parent = root
     local saved = {
         root=root,foot=foot,noclip=noclip,
@@ -6931,8 +6908,8 @@ local function moveTo(target,speed)
             else
                 wanted = delta.Unit*math.min(
                     speed,
-                    math.sqrt(360*math.max(0,distance-0.4)),
-                    distance*2.5
+                    math.sqrt(1600*math.max(0,distance-0.4)),
+                    distance*6
                 )
             end
         end
@@ -6940,7 +6917,7 @@ local function moveTo(target,speed)
             commanded = wanted
         else
             local change = wanted-commanded
-            local limit = 140*math.min(dt,0.1)
+            local limit = 600*math.min(dt,0.1)
             if change.Magnitude > limit then change = change.Unit*limit end
             commanded = commanded+change
         end
@@ -7003,11 +6980,6 @@ local function boardDriver(car)
         waitChecked(0.4)
         local currentDriver,passengers = seatParts(car)
         local d = (context.root.Position-currentDriver.Position).Magnitude
-        for _,passenger in ipairs(passengers) do
-            if (context.root.Position-passenger.Position).Magnitude <= d then
-                error("Driver-side approach not confirmed.",0)
-            end
-        end
         tapE()
         local t,stableSince = os.clock(),nil
         while os.clock()-t < 5 do
@@ -7043,9 +7015,9 @@ local function flyVehicle(car,target)
         setStatus("Vehicle: climbing...")
         moveTo(V(origin.X,height,origin.Z),120)
         setStatus("Vehicle: cruising...")
-        moveTo(V(target.X,height,target.Z),280)
+        moveTo(V(target.X,height,target.Z),400)
         setStatus("Vehicle: descending...")
-        moveTo(target,90)
+        moveTo(target,240)
         endMotion()
     end
     waitChecked(0.4)
@@ -8304,7 +8276,7 @@ local function beginFlight(car)
     orientation.Mode=Enum.OrientationAlignmentMode.OneAttachment
     orientation.Attachment0=a
     orientation.RigidityEnabled=true
-    orientation.CFrame=root.CFrame.Rotation
+    orientation.CFrame=_hubLevel(root)
     f.orientation=orientation
     if f.foot then
         hum.Sit=false
@@ -8365,7 +8337,7 @@ local function moveTo(target,speed)
         else
             local wanted=Vector3.zero
             if distance>.01 then
-                wanted=delta.Unit*math.min(speed,math.sqrt(360*math.max(0,distance-.4)),distance*2.5)
+                wanted=delta.Unit*math.min(speed,math.sqrt(1600*math.max(0,distance-.4)),distance*6)
             end
             local change=wanted-command
             local limit=140*math.min(dt,.1)
@@ -8410,10 +8382,6 @@ local function boardDriver(car)
         waitFor(.4)
         local _,root=characterParts()
         local d,passengers=seats(car)
-        for _,p in ipairs(passengers) do
-            assert((root.Position-d.Position).Magnitude<(root.Position-p.Position).Magnitude,
-                "Driver-side approach not confirmed")
-        end
         tapE()
         local deadline=os.clock()+5
         local stable=nil
@@ -8441,9 +8409,9 @@ local function flyCar(car,target)
         log("Vehicle: climbing")
         moveTo(V(origin.X,height,origin.Z),120)
         log("Vehicle: cruising")
-        moveTo(V(target.X,height,target.Z),280)
+        moveTo(V(target.X,height,target.Z),400)
         log("Vehicle: descending")
-        moveTo(target,90)
+        moveTo(target,240)
         endFlight()
     end
     waitFor(.4)
@@ -8529,7 +8497,7 @@ for _, name in ipairs({NAME, "CameraAimPrototype", "MovementControlsPrototype", 
     if old then old:Destroy() end
 end
 
-local S = {aim=false, esp=false, speed=false, auto=false}
+local S = {aim=false, esp=false, speed=false, auto=false, infiniteJump=false}
 local hubActive, hubEngine, hubStopping = nil,nil,false
 local toggleJob, setNoclip
 local noclipOn=false
@@ -8852,7 +8820,7 @@ local function espVisibility()
     end
 end
 local function toggleFeature(key)
-    if hubActive and (key=="speed" or key=="fly" or key=="aim") then
+    if (hubActive or S.farmRunning) and (key=="speed" or key=="fly" or key=="aim") then
         aimStatus.Text="Stop the active automation before changing movement or Aim."; return
     end
     if key=="fly" then
@@ -8868,31 +8836,86 @@ addSwitch("Aim", function() return S.aim end, function() toggleFeature("aim") en
 addSwitch("ESP / WH", function() return S.esp end, function() toggleFeature("esp") end)
 addSwitch("Fly", function() return flight~=nil end, function() toggleFeature("fly") end)
 addSwitch("Vehicle Fly",function() return vehicleFly.state~=nil end,function()
-    if hubActive then arrestStatus.Text="Stop automation before enabling Vehicle Fly.";return end
+    if hubActive or S.farmRunning then arrestStatus.Text="Stop automation before enabling Vehicle Fly.";return end
     if vehicleFly.state then vehicleFly.stop() else vehicleFly.start() end
     refresh()
 end)
 field("Vehicle Fly Speed",vehicleFly.speed,function(n)
     vehicleFly.speed=math.clamp(n,10,200);return vehicleFly.speed
 end)
+addSwitch("Infinite Jump",function() return S.infiniteJump end,function()
+    S.infiniteJump=not S.infiniteJump;refresh()
+end)
+connect(Input.JumpRequest,function()
+    if not S.infiniteJump or stopped or not focused or hubActive or S.farmRunning or flight or vehicleFly.state
+        or capturing or Input:GetFocusedTextBox() or GuiService.MenuIsOpen then return end
+    local c,h,r=info(me)
+    if not c or h.Sit or h.SeatPart or h.PlatformStand or r.Anchored then return end
+    local assembly=r.AssemblyRootPart
+    if assembly and not assembly:IsDescendantOf(c) then return end
+    local power=h.UseJumpPower and h.JumpPower or math.sqrt(2*workspace.Gravity*h.JumpHeight)
+    local v=r.AssemblyLinearVelocity
+    r.AssemblyLinearVelocity=Vector3.new(v.X,math.max(v.Y,power),v.Z)
+    h:ChangeState(Enum.HumanoidStateType.Jumping)
+end)
 addSwitch("Speed", function() return S.speed end, function() toggleFeature("speed") end)
 addSwitch("Noclip", function() return noclipOn end, function()
-    if hubActive then arrestStatus.Text="Stop automation before changing Noclip.";return end
+    if hubActive or S.farmRunning then arrestStatus.Text="Stop automation before changing Noclip.";return end
     setNoclip(not noclipOn);refresh()
 end)
 addSwitch("Auto Arrest", function() return hubActive=="Auto Arrest" end, function() toggleJob("Auto Arrest") end)
-local farmHeader=row("TextButton", {Text="Auto Farm     ∨",TextXAlignment=Enum.TextXAlignment.Left,
-    TextColor3=Color3.new(1,1,1),TextSize=14,BackgroundColor3=Color3.fromRGB(39,28,55)})
-connect(farmHeader.Activated,function()
+local farm={enabled=false,selected={},records={},boxes={},consumed={},cursor=0,nextRun=0,
+    names={"Donut","Market","Gas Station","Casino","Jewelry","Oil Rig","Factory"},
+    markers={Donut="label_Donut",Market="label_Grocery",["Gas Station"]="label_Gas",
+        Casino="label_Casino",Jewelry="label_Jewelry",["Oil Rig"]="label_OilRig",Factory="label_PowerPlant"}}
+function farm.all()
+    for _,name in ipairs(farm.names) do if not farm.selected[name] then return false end end
+    return true
+end
+function farm.paint()
+    S.farmRunning=farm.enabled
+    if arrestStatus then arrestStatus.Size=UDim2.new(1,-4,0,farm.enabled and 175 or 92) end
+    for name,box in pairs(farm.boxes) do
+        local on=name=="All" and farm.all() or name~="All" and farm.selected[name]
+        box.Text=on and "✓" or ""
+        box.BackgroundColor3=on and Color3.fromRGB(162,65,245) or Color3.fromRGB(51,32,70)
+    end
+    if farm.runButton then farm.runButton.Text=farm.enabled and "Stop Auto Farm" or "Start Auto Farm" end
+end
+function farm.box(parent,size,action)
+    local box=make("TextButton",{AnchorPoint=Vector2.new(1,.5),Position=UDim2.new(1,-8,.5,0),
+        Size=UDim2.fromOffset(size,size),Text="",TextSize=21,TextColor3=Color3.new(1,1,1),
+        BackgroundColor3=Color3.fromRGB(51,32,70)},parent)
+    make("UICorner",{CornerRadius=UDim.new(0,5)},box);glow(box)
+    connect(box.Activated,action);return box
+end
+local farmHeader=row("Frame",{BackgroundColor3=Color3.fromRGB(39,28,55)})
+farm.expand=make("TextButton",{Text="Auto Farm     ∨",TextXAlignment=Enum.TextXAlignment.Left,
+    Size=UDim2.new(1,-44,1,0),BackgroundTransparency=1,TextColor3=Color3.new(1,1,1),TextSize=14},farmHeader)
+glow(farm.expand)
+connect(farm.expand.Activated,function()
     farmOpen=not farmOpen
-    farmHeader.Text=farmOpen and "Auto Farm     ∧" or "Auto Farm     ∨"
+    farm.expand.Text=farmOpen and "Auto Farm     ∧" or "Auto Farm     ∨"
     for _,r in ipairs(farmRows) do r.Visible=farmOpen end
 end)
-for _,name in ipairs({"Donut","Market","Gas Station","Casino","Jewelry","Oil Rig","Factory"}) do
+farm.boxes.All=farm.box(farmHeader,28,function()
+    local on=not farm.all()
+    for _,name in ipairs(farm.names) do farm.selected[name]=on end
+    if farm.setEnabled then farm.setEnabled(on) end
+    farm.paint()
+end)
+for _,name in ipairs(farm.names) do
     local job=name
-    local r=addSwitch("  "..job,function() return hubActive==job end,function() toggleJob(job) end)
+    local r=row("Frame",{BackgroundColor3=Color3.fromRGB(39,28,55)})
+    make("TextLabel",{Position=UDim2.fromOffset(8,0),Size=UDim2.new(1,-45,1,0),
+        Text=job,TextXAlignment=Enum.TextXAlignment.Left,TextSize=14,TextColor3=Color3.new(1,1,1),BackgroundTransparency=1},r)
+    farm.boxes[job]=farm.box(r,22,function() farm.selected[job]=not farm.selected[job];farm.paint() end)
     r.Visible=false;farmRows[#farmRows+1]=r
 end
+farm.runButton=row("TextButton",{Text="Start Auto Farm",TextSize=14,TextColor3=Color3.new(1,1,1),
+    BackgroundColor3=Color3.fromRGB(114,45,196)})
+farm.runButton.Visible=false;farmRows[#farmRows+1]=farm.runButton
+connect(farm.runButton.Activated,function() if farm.setEnabled then farm.setEnabled(not farm.enabled) end end)
 field("Fly Speed", flySpeed, function(n) flySpeed=math.clamp(n,10,300); return flySpeed end)
 field("Ground Speed", runSpeed, function(n) runSpeed=math.clamp(n,10,200); return runSpeed end)
 aimStatus=label("", 46)
@@ -8965,6 +8988,7 @@ local function stopJob(reason)
     if not ok then arrestStatus.Text="Stop error: "..tostring(err) end
 end
 toggleJob=function(name)
+    if name=="Auto Arrest" and farm.enabled then arrestStatus.Text="Stop Auto Farm first.";return end
     if hubActive==name then stopJob("Stopping "..name.."...");return end
     if hubActive then arrestStatus.Text="Stop "..hubActive.." before starting another automation.";return end
     local t=team(me)
@@ -8984,7 +9008,25 @@ toggleJob=function(name)
     refresh()
     local ok,err=pcall(function()
         assert(type(loadstring)=="function","This executor does not provide loadstring")
-        local fn,compileError=loadstring(source,"Funstatov/"..name)
+        local fn,compileError=loadstring([==[
+local function _hubLevel(root)
+    local folder=workspace:FindFirstChild("Vehicles")
+    if not folder or not root:IsDescendantOf(folder) then return root.CFrame.Rotation end
+    local model=root
+    while model.Parent and model.Parent~=folder do model=model.Parent end
+    local seat=model:FindFirstChild("Seat",true)
+    local reference=seat and seat:IsA("BasePart") and seat or root
+    local look=reference.CFrame.LookVector
+    local flat=Vector3.new(look.X,0,look.Z)
+    if flat.Magnitude<0.01 then
+        local right=reference.CFrame.RightVector
+        flat=Vector3.new(right.Z,0,-right.X)
+    end
+    if flat.Magnitude<0.01 then flat=Vector3.new(0,0,-1) end
+    local offset=reference.CFrame.Rotation:ToObjectSpace(root.CFrame.Rotation)
+    return CFrame.lookAt(Vector3.zero,flat.Unit)*offset
+end
+]==]..source,"Funstatov/"..name)
         assert(fn,compileError)
         hubEngine=fn()
         assert(type(hubEngine)=="table" and hubEngine.Start,"Invalid module")
@@ -8997,6 +9039,173 @@ toggleJob=function(name)
         lastHubLog=arrestStatus.Text
     else arrestStatus.Text=name..": starting..." end
     refresh()
+end
+function farm.releaseHold()
+    local h=farm.hold;farm.hold=nil
+    if not h then return end
+    h.v:Destroy();h.o:Destroy();h.a:Destroy()
+    if h.root.Parent then h.root.AssemblyLinearVelocity=Vector3.zero;h.root.AssemblyAngularVelocity=Vector3.zero end
+end
+function farm.setEnabled(on)
+    if on then
+        if hubActive then arrestStatus.Text="Stop the current automation first.";return end
+        local t=team(me)
+        if t~="criminal" and t~="criminals" then arrestStatus.Text="Join the Criminal team first.";return end
+        local car,why=camaroDriver()
+        if not car then arrestStatus.Text=why;return end
+        local any=false;for _,name in ipairs(farm.names) do if farm.selected[name] then any=true end end
+        if not any then arrestStatus.Text="Select at least one robbery.";return end
+        stopFly();stopSpeed();setNoclip(false);S.speed=false
+        farm.enabled=true;farm.nextRun=os.clock()+.5
+        arrestStatus.Text="Auto Farm: observing robbery markers..."
+    else
+        farm.enabled=false;farm.releaseHold()
+        if hubActive and hubActive~="Auto Arrest" then stopJob("Stopping Auto Farm...") end
+    end
+    farm.paint();refresh()
+end
+function farm.classify(c)
+    if c.R>.75 and c.G<.25 and c.B<.25 then return "closed" end
+    if c.G>.8 and c.R<.15 and c.B<.15 then return "green" end
+    if c.G>.8 and c.R>.2 and c.B>.2 then return "busy" end
+    return "unknown"
+end
+function farm.observe(rec,kind,now)
+    if not rec.lastSample or now-rec.lastSample>.5 then rec.greenSince=nil end
+    rec.lastSample=now
+    if kind=="green" then
+        rec.greenSince=rec.greenSince or now
+        rec.status=now-rec.greenSince>=5 and "open" or "checking"
+    else
+        rec.greenSince=nil;rec.status=kind
+    end
+    return rec.status
+end
+function farm.scan(now)
+    if not farm.scanAt or now-farm.scanAt>1 then
+        farm.scanAt=now;farm.nodes={}
+        for _,o in ipairs(playerGui:GetDescendants()) do
+            if (o:IsA("ImageLabel") or o:IsA("ImageButton")) and o.Parent and o.Parent.Name=="Points" then
+                for name,id in pairs(farm.markers) do
+                    if o.Name==id then
+                        farm.nodes[name]=farm.nodes[name] or {};table.insert(farm.nodes[name],o)
+                    end
+                end
+            end
+        end
+    end
+    for _,name in ipairs(farm.names) do
+        local kind=nil
+        for _,o in ipairs(farm.nodes[name] or {}) do
+            if o:IsDescendantOf(playerGui) and o.Visible and o.ImageTransparency<1 then
+                local k=farm.classify(o.ImageColor3)
+                if not kind then kind=k elseif kind~=k then kind="unknown";break end
+            end
+        end
+        local r=farm.records[name] or {};farm.records[name]=r
+        local status=farm.observe(r,kind or "unknown",now)
+        local used=farm.consumed[name]
+        if used then
+            if status=="closed" then used.closed=true end
+            if used.closed and status=="open" then farm.consumed[name]=nil end
+        end
+    end
+end
+function farm.hover(dt)
+    local root,c,h,seat=vehicleFly.driver()
+    if not root then return false,"Driver seat lost." end
+    if not farm.hold then
+        local model=camaroDriver()
+        local params=RaycastParams.new();params.FilterType=Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances={model,c};params.RespectCanCollide=true
+        if workspace:Raycast(root.Position,Vector3.new(0,220,0),params) then
+            return false,"Cannot hover: the sky above your Camaro is obstructed."
+        end
+        local a=make("Attachment",{},root)
+        local v=make("LinearVelocity",{Attachment0=a,RelativeTo=Enum.ActuatorRelativeTo.World,
+            VelocityConstraintMode=Enum.VelocityConstraintMode.Vector,ForceLimitsEnabled=false,VectorVelocity=Vector3.zero},root)
+        local look=Vector3.new(seat.CFrame.LookVector.X,0,seat.CFrame.LookVector.Z)
+        if look.Magnitude<.01 then look=Vector3.new(0,0,-1) end
+        local rotation=CFrame.lookAt(Vector3.zero,look.Unit)*seat.CFrame.Rotation:ToObjectSpace(root.CFrame.Rotation)
+        local o=make("AlignOrientation",{Attachment0=a,Mode=Enum.OrientationAlignmentMode.OneAttachment,
+            RigidityEnabled=true,CFrame=rotation},root)
+        farm.hold={root=root,a=a,v=v,o=o,position=root.Position+Vector3.new(0,200,0)}
+    end
+    local f=farm.hold
+    if root~=f.root or not f.v.Parent then return false,"Your Camaro changed." end
+    local delta=f.position-root.Position
+    local velocity=delta*3
+    if velocity.Magnitude>100 then velocity=velocity.Unit*100 end
+    f.v.VectorVelocity=velocity
+    return true
+end
+farm.poll=0
+connect(Run.Heartbeat,function(dt)
+    farm.poll=farm.poll+dt
+    if farm.poll<.1 then return end
+    farm.poll=0
+    if not farm.enabled or stopped then return end
+    local now=os.clock();farm.scan(now)
+    local t=team(me)
+    if t~="criminal" and t~="criminals" or not focused then
+        farm.setEnabled(false);arrestStatus.Text="Auto Farm stopped: team changed or Roblox lost focus.";return
+    end
+    if hubActive then return end
+    local car,why=camaroDriver()
+    if not car then farm.setEnabled(false);arrestStatus.Text=why;return end
+    if now>=farm.nextRun then
+        for step=1,#farm.names do
+            local i=(farm.cursor+step-1)%#farm.names+1;local name=farm.names[i]
+            if farm.selected[name] and farm.records[name].status=="open" and not farm.consumed[name] then
+                farm.releaseHold();farm.cursor=i;farm.consumed[name]={closed=false};farm.nextRun=now+3
+                toggleJob(name)
+                if not hubActive then farm.setEnabled(false) end
+                return
+            end
+        end
+    end
+    local ok,reason=farm.hover(dt)
+    if not ok then farm.setEnabled(false);arrestStatus.Text=reason;return end
+    local text={"Auto Farm: waiting in the air"}
+    for _,name in ipairs(farm.names) do
+        if farm.selected[name] then
+            local state=farm.records[name].status
+            if farm.consumed[name] then state="waiting for reopening" end
+            text[#text+1]=name..": "..state
+        end
+    end
+    arrestStatus.Text=table.concat(text,"\n")
+end)
+do
+    local fired=false
+    local inputService=game:GetService("VirtualInputManager")
+    local function promptVisible()
+        local falling=playerGui:FindFirstChild("FallingGui")
+        local button=falling and falling:FindFirstChild("Button")
+        if not button or not (button:IsA("ImageLabel") or button:IsA("ImageButton")) then return false end
+        if not button.Image:find("4915089706",1,true) or button.ImageTransparency>=1 then return false end
+        local parent=button
+        while parent and parent~=playerGui do
+            if parent:IsA("GuiObject") and not parent.Visible then return false end
+            if parent:IsA("ScreenGui") and not parent.Enabled then return false end
+            parent=parent.Parent
+        end
+        return parent==playerGui
+    end
+    connect(Run.Heartbeat,function()
+        if not promptVisible() then fired=false;return end
+        if fired or stopped or hubActive~="Auto Arrest" or not focused then return end
+        if Input:GetFocusedTextBox() or GuiService.MenuIsOpen then return end
+        fired=true
+        task.spawn(function()
+            local ok,err=pcall(function()
+                inputService:SendKeyEvent(true,Enum.KeyCode.Space,false,game)
+            end)
+            if ok then task.wait(.05) end
+            pcall(function() inputService:SendKeyEvent(false,Enum.KeyCode.Space,false,game) end)
+            if not ok then warn("[Parachute] Space input failed: "..tostring(err)) end
+        end)
+    end)
 end
 local hubPoll=0
 connect(Run.Heartbeat,function(dt)
@@ -9017,6 +9226,10 @@ connect(Run.Heartbeat,function(dt)
         local logOK,logText=pcall(engine.Log)
         if logOK then lastHubLog=logText end
         if not hubStopping then arrestStatus.Text=statusOK and tostring(statusText) or "Automation finished." end
+        if farm.enabled then
+            farm.nextRun=os.clock()+2
+            if hubStopping or not ok then farm.enabled=false;farm.releaseHold();farm.paint() end
+        end
         pcall(engine.Destroy)
         hubEngine=nil;hubCar=nil;hubActive=nil;hubStopping=false
         refresh()
@@ -9025,7 +9238,7 @@ connect(Run.Heartbeat,function(dt)
         if statusOK then arrestStatus.Text=hubActive.."\n"..tostring(statusText) end
     end
 end)
-connect(me.CharacterRemoving,function() setNoclip(false);stopJob("Stopped: character removed.") end)
+connect(me.CharacterRemoving,function() farm.setEnabled(false);setNoclip(false);stopJob("Stopped: character removed.") end)
 if assetNotice then arrestStatus.Text=assetNotice end
 
 local function layoutMenu()
@@ -9440,6 +9653,7 @@ Run:BindToRenderStep(NAME,Enum.RenderPriority.Last.Value+1,function()
     end
 end)
 connect(gui.Destroying,function()
+    farm.enabled=false;farm.releaseHold()
     stopped=true; ticket=ticket+1; releaseInteraction()
     setNoclip(false)
     if hubEngine then pcall(hubEngine.Stop);pcall(hubEngine.Destroy) end
